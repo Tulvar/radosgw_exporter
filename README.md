@@ -1,7 +1,5 @@
-```markdown
-# radosgw_exporter
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+# radosgw_exporter
 
 > **EN** — [English version below](#radosgw_exporter-1)  
 > **RU** — экспортер метрик Ceph RADOS Gateway для Prometheus
@@ -17,8 +15,6 @@
 - Использование бакетов (`bucket_usage_bytes`, `bucket_usage_objects`)
 - Квоты пользователей и бакетов
 - Общее потребление по пользователям
-
-Экспортер написан на **Go**, не требует зависимостей от `librados`, работает в **Kubernetes** и поддерживает **graceful shutdown**, **логирование**, **TLS** и **безопасную передачу секретов**.
 
 ---
 
@@ -105,19 +101,12 @@ docker run -p 9242:9242 \
 
 ---
 
-## 📜 Лицензия
-
-MIT
-
----
 
 <br><br>
 
 ---
 
 # radosgw_exporter
-
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 > **RU** — [Русская версия выше](#radosgw_exporter)  
 > **EN** — Prometheus exporter for Ceph RADOS Gateway metrics
@@ -218,10 +207,3 @@ docker run -p 9242:9242 \
 - `radosgw_usage_user_quota_size_bytes`
 - `radosgw_up` — `1` if healthy, `0` on error
 - and more (see source)
-
----
-
-## 📜 License
-
-MIT
-```
