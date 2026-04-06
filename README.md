@@ -1,210 +1,115 @@
+# 📦 RADOSGW Exporter
 
-# radosgw_exporter
-
-> **EN** — [English version below](#radosgw_exporter-1)  
-> **RU** — экспортер метрик Ceph RADOS Gateway для Prometheus
-
----
-
-## 📌 Описание (RU)
-
-`radosgw_exporter` — это экспортер [Prometheus](https://prometheus.io/), который собирает метрики использования, квот и статистики бакетов из **Ceph RADOS Gateway (RGW)** через Admin API.
-
-Он позволяет мониторить:
-- Операции по бакетам и категориям (`ops`, `successful_ops`, `bytes_sent`, `bytes_received`)
-- Использование бакетов (`bucket_usage_bytes`, `bucket_usage_objects`)
-- Квоты пользователей и бакетов
-- Общее потребление по пользователям
+Prometheus-экспортер для Ceph RADOSGW Admin API.
+Разработан для Kubernetes, поддерживает сбор метрик по пользователям, бакетам, usage, квотам и S3-Select.
+Имеет гибкое управление метриками, чтобы избежать проблем с высокой кардинальностью.
 
 ---
 
-## 🚀 Быстрый старт (RU)
+## 🚀 Возможности
 
-### 1. Создайте админ-пользователя в Ceph
-
-```bash
-radosgw-admin user create \
-  --uid=radosgw-exporter \
-  --display-name="RADOSGW Exporter" \
-  --caps="buckets=read;users=read;usage=read;metadata=read"
-```
-
-Сохраните `access_key` и `secret_key`.
-
-### 2. Запустите экспортер
-
-```bash
-export RADOSGW_ENDPOINT="https://ceph-gw.example.com"
-export ACCESS_KEY="..."
-export SECRET_KEY="..."
-export STORE="prod-cluster"
-export METRICS_PORT=9242
-export INSECURE_SKIP_VERIFY=false  # true только для тестов!
-
-go run .
-```
-
-### 3. Проверьте метрики
-
-```bash
-curl http://localhost:9242/metrics | grep radosgw
-```
-
+* Сбор метрик из RGW Admin API
+* Подача данных в Prometheus формате
+* Поддержка TLS и k8s
+* Управление нагрузкой через ENV флаги
+* Поддержка квот пользователей и бакетов
+* Детальная статистика usage (опционально)
+* Метрики S3-Select (опционально)
+* Минимальная зависимость от Ceph версии
 ---
 
-## 📦 Docker
+## 📌 Требования
 
-```bash
-docker build -t radosgw-exporter .
-docker run -p 9242:9242 \
-  -e RADOSGW_ENDPOINT="https://ceph:443" \
-  -e ACCESS_KEY="..." \
-  -e SECRET_KEY="..." \
-  radosgw-exporter
-```
-
----
-
-## 🛡️ Безопасность
-
-- Никогда не храните `ACCESS_KEY` и `SECRET_KEY` в коде или ConfigMap.
-- Используйте `Secret` в Kubernetes:
-  ```yaml
-  envFrom:
-    - secretRef:
-        name: radosgw-exporter-secret
-  ```
-
+* Доступ к RADOSGW Admin API
+* Действительные ACCESS_KEY и SECRET_KEY
+* Prometheus или VictoriaMetrics
 ---
 
 ## ⚙️ Переменные окружения
+### 🔐 Обязательные
 
-| Переменная | По умолчанию | Описание |
-|-----------|--------------|--------|
-| `RADOSGW_ENDPOINT` | — | URL RADOSGW (без `/admin`) |
-| `ACCESS_KEY` | — | **Обязательно** |
-| `SECRET_KEY` | — | **Обязательно** |
-| `STORE` | `us-east-1` | Лейбл `store` в метриках |
-| `METRICS_PORT` | `9242` | Порт для `/metrics` |
-| `INSECURE_SKIP_VERIFY` | `false` | Игнорировать ошибки TLS (только для dev) |
-
----
-
-## 📈 Метрики
-
-- `radosgw_usage_ops_total`
-- `radosgw_usage_sent_bytes_total`
-- `radosgw_usage_bucket_bytes`
-- `radosgw_usage_user_quota_size_bytes`
-- `radosgw_up` — `1` если экспортер работает, `0` — если ошибка
-- и другие (см. исходный код)
-
----
-
-
-<br><br>
-
----
-
-# radosgw_exporter
-
-> **RU** — [Русская версия выше](#radosgw_exporter)  
-> **EN** — Prometheus exporter for Ceph RADOS Gateway metrics
-
----
-
-## 📌 Description (EN)
-
-`radosgw_exporter` is a [Prometheus](https://prometheus.io/) exporter that fetches usage, quota, and bucket statistics from **Ceph RADOS Gateway (RGW)** via Admin API.
-
-It exposes metrics for:
-- Bucket operations (`ops`, `successful_ops`, `bytes_sent`, `bytes_received`)
-- Bucket usage (`bucket_usage_bytes`, `bucket_usage_objects`)
-- User and bucket quotas
-- Per-user total consumption
-
-Written in **Go**, with **no CGO dependencies**, **Kubernetes-ready**, and supports **graceful shutdown**, **structured logging**, **TLS**, and **secure secret handling**.
-
----
-
-## 🚀 Quick Start (EN)
-
-### 1. Create an admin user in Ceph
+| Переменная  | Описание  |
+|---|---|
+|  RADOSGW_ENDPOINT | URL до RADOSGW Admin API   |
+|  ACCESS_KEY | Admin access key  |
+|  SECRET_KEY | Admin secret key  |
 
 ```bash
-radosgw-admin user create \
-  --uid=radosgw-exporter \
-  --display-name="RADOSGW Exporter" \
-  --caps="buckets=read;users=read;usage=read;metadata=read"
+RADOSGW_ENDPOINT=https://rgw.example.com/admin
+ACCESS_KEY=xxxx
+SECRET_KEY=yyyy
 ```
+---
 
-Save the `access_key` and `secret_key`.
+## 🏁 Управление группами метрик
 
-### 2. Run the exporter
+Каждый флаг включает/выключает отдельную группу метрик.
+Это критично важно на больших кластерах, где могут быть миллионы бакетов/пользователей.
+
+✔️ ENABLE_USER_STATS (по умолчанию: true)
+
+Включает метрики по пользователям:
+```bash
+radosgw_user_total_bytes
+radosgw_user_total_objects
+radosgw_user_quota_*
+radosgw_user_bucket_quota_*
+```
+Отключить:
 
 ```bash
-export RADOSGW_ENDPOINT="https://ceph-gw.example.com"
-export ACCESS_KEY="..."
-export SECRET_KEY="..."
-export STORE="prod-cluster"
-export METRICS_PORT=9242
-export INSECURE_SKIP_VERIFY=false  # true only for dev!
-
-go run .
+ENABLE_USER_STATS=false
 ```
 
-### 3. Check metrics
+✔️ ENABLE_BUCKET_STATS (по умолчанию: true)
+
+Включает метрики по бакетам:
 
 ```bash
-curl http://localhost:9242/metrics | grep radosgw
+radosgw_bucket_usage_bytes
+radosgw_bucket_usage_objects
+radosgw_bucket_quota_*
+```
+Отключить:
+```bash
+ENABLE_BUCKET_STATS=false
 ```
 
----
-
-## 📦 Docker
+✔️ ENABLE_USAGE_METRICS (по умолчанию: false)
 
 ```bash
-docker build -t radosgw-exporter .
-docker run -p 9242:9242 \
-  -e RADOSGW_ENDPOINT="https://ceph:443" \
-  -e ACCESS_KEY="..." \
-  -e SECRET_KEY="..." \
-  radosgw-exporter
+radosgw_usage_ops
+radosgw_usage_successful_ops
+radosgw_usage_failed_ops
+radosgw_usage_sent_bytes
+radosgw_usage_received_bytes
+radosgw_usage_epoch
+```
+Включать только если действительно нужны эти данные:
+```bash
+ENABLE_USAGE_METRICS=true
 ```
 
+✔️ ENABLE_S3SELECT_METRICS (по умолчанию: false)
+```bash
+radosgw_s3select_bytes_processed
+radosgw_s3select_bytes_returned
+radosgw_s3select_epoch
+```
+📌 Обычно не нужны, если не используется S3-Select аналитика
+```bash
+ENABLE_S3SELECT_METRICS=true
+```
 ---
-
-## 🛡️ Security
-
-- Never store `ACCESS_KEY` / `SECRET_KEY` in code or ConfigMaps.
-- Use Kubernetes `Secret`:
-  ```yaml
-  envFrom:
-    - secretRef:
-        name: radosgw-exporter-secret
-  ```
-
+## 🔧 Дополнительные переменные
+| Переменная  | Значение по умолчанию  | Описание  |  
+|---|---|---|
+| INSECURE_SKIP_VERIFY  |  false |  Отключает TLS проверку |   
+|  SCRAPE_TIMEOUT |  15 |  Таймаут сбора метрик (сек) |  
+| METRICS_PORT  | 9242  | HTTP порт экспорта метрик  |  
 ---
+## 📊 Метрики доступны по адресу
 
-## ⚙️ Environment Variables
-
-| Variable | Default | Description |
-|--------|--------|-----------|
-| `RADOSGW_ENDPOINT` | — | RGW endpoint URL (without `/admin`) |
-| `ACCESS_KEY` | — | **Required** |
-| `SECRET_KEY` | — | **Required** |
-| `STORE` | `us-east-1` | `store` label value |
-| `METRICS_PORT` | `9242` | Port for `/metrics` |
-| `INSECURE_SKIP_VERIFY` | `false` | Skip TLS verification (dev only) |
-
----
-
-## 📈 Metrics
-
-- `radosgw_usage_ops_total`
-- `radosgw_usage_sent_bytes_total`
-- `radosgw_usage_bucket_bytes`
-- `radosgw_usage_user_quota_size_bytes`
-- `radosgw_up` — `1` if healthy, `0` on error
-- and more (see source)
-
+```bash
+http://<ip>:9242/metrics
+```
