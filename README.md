@@ -90,17 +90,6 @@ radosgw_usage_epoch
 ENABLE_USAGE_METRICS=true
 ```
 
-✔️ ENABLE_S3SELECT_METRICS (по умолчанию: false)
-```bash
-radosgw_s3select_bytes_processed
-radosgw_s3select_bytes_returned
-radosgw_s3select_epoch
-```
-📌 Обычно не нужны, если не используется S3-Select аналитика
-```bash
-ENABLE_S3SELECT_METRICS=true
-```
----
 ## 🔧 Дополнительные переменные
 | Переменная  | Значение по умолчанию  | Описание  |  
 |---|---|---|

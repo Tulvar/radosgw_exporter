@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"log/slog"
 	"net/http"
-	"reflect"
 	"time"
 
 	"github.com/ceph/go-ceph/rgw/admin"
@@ -17,22 +17,12 @@ type usageMetricKey struct {
 }
 
 type usagePoint struct {
-	epoch         int64
+	epoch         uint64
 	ops           float64
 	successfulOps float64
 	failedOps     float64
 	bytesSent     float64
 	bytesReceived float64
-}
-
-type s3SelectKey struct {
-	bucket, owner string
-}
-
-type s3SelectPoint struct {
-	epoch          int64
-	bytesProcessed float64
-	bytesReturned  float64
 }
 
 type RADOSGWCollector struct {
@@ -45,10 +35,6 @@ type RADOSGWCollector struct {
 	usageBytesSent     *prometheus.Desc
 	usageBytesReceived *prometheus.Desc
 	usageEpoch         *prometheus.Desc
-
-	s3selectBytesProcessed *prometheus.Desc
-	s3selectBytesReturned  *prometheus.Desc
-	s3selectEpoch          *prometheus.Desc
 
 	bucketUsageBytes   *prometheus.Desc
 	bucketUsageObjects *prometheus.Desc
@@ -71,11 +57,10 @@ type RADOSGWCollector struct {
 	scrapeDurationSeconds *prometheus.Desc
 	up                    *prometheus.Desc
 
-	scrapeTimeout         time.Duration
-	enableUserStats       bool
-	enableBucketStats     bool
-	enableUsageMetrics    bool
-	enableS3SelectMetrics bool
+	scrapeTimeout      time.Duration
+	enableUserStats    bool
+	enableBucketStats  bool
+	enableUsageMetrics bool
 }
 
 func NewRADOSGWCollector(
@@ -85,12 +70,11 @@ func NewRADOSGWCollector(
 	enableUserStats bool,
 	enableBucketStats bool,
 	enableUsageMetrics bool,
-	enableS3SelectMetrics bool,
 	logger *slog.Logger,
-) *RADOSGWCollector {
+) (*RADOSGWCollector, error) {
 
 	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: scrapeTimeout + 5*time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: insecure,
@@ -100,12 +84,10 @@ func NewRADOSGWCollector(
 
 	client, err := admin.New(endpoint, accessKey, secretKey, httpClient)
 	if err != nil {
-		logger.Error("Failed to create RGW admin client", "error", err)
-		panic(err)
+		return nil, err
 	}
 
 	usageLabels := []string{"bucket", "owner", "category"}
-	s3selectLabels := []string{"bucket", "owner"}
 	bucketStatLabels := []string{"bucket", "owner", "usage_scope"}
 	bucketQuotaLabels := []string{"bucket", "owner"}
 	userLabels := []string{"user"}
@@ -143,22 +125,6 @@ func NewRADOSGWCollector(
 			"radosgw_usage_epoch",
 			"Usage epoch",
 			usageLabels, nil,
-		),
-
-		s3selectBytesProcessed: prometheus.NewDesc(
-			"radosgw_s3select_bytes_processed",
-			"S3Select bytes processed",
-			s3selectLabels, nil,
-		),
-		s3selectBytesReturned: prometheus.NewDesc(
-			"radosgw_s3select_bytes_returned",
-			"S3Select bytes returned",
-			s3selectLabels, nil,
-		),
-		s3selectEpoch: prometheus.NewDesc(
-			"radosgw_s3select_epoch",
-			"S3Select epoch",
-			s3selectLabels, nil,
 		),
 
 		bucketUsageBytes: prometheus.NewDesc(
@@ -243,12 +209,11 @@ func NewRADOSGWCollector(
 			nil, nil,
 		),
 
-		scrapeTimeout:         scrapeTimeout,
-		enableUserStats:       enableUserStats,
-		enableBucketStats:     enableBucketStats,
-		enableUsageMetrics:    enableUsageMetrics,
-		enableS3SelectMetrics: enableS3SelectMetrics,
-	}
+		scrapeTimeout:      scrapeTimeout,
+		enableUserStats:    enableUserStats,
+		enableBucketStats:  enableBucketStats,
+		enableUsageMetrics: enableUsageMetrics,
+	}, nil
 }
 
 func (c *RADOSGWCollector) Describe(ch chan<- *prometheus.Desc) {
@@ -263,12 +228,6 @@ func (c *RADOSGWCollector) Describe(ch chan<- *prometheus.Desc) {
 		ch <- c.usageBytesSent
 		ch <- c.usageBytesReceived
 		ch <- c.usageEpoch
-	}
-
-	if c.enableS3SelectMetrics {
-		ch <- c.s3selectBytesProcessed
-		ch <- c.s3selectBytesReturned
-		ch <- c.s3selectEpoch
 	}
 
 	if c.enableUserStats {
@@ -307,53 +266,39 @@ func (c *RADOSGWCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.up, prometheus.GaugeValue, up)
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.scrapeTimeout)
+	scrapeCtx, cancel := context.WithTimeout(context.Background(), c.scrapeTimeout)
 	defer cancel()
 
-	showEntries, showSummary := true, false
-	usage, err := c.client.GetUsage(ctx, admin.Usage{
-		ShowEntries: &showEntries,
-		ShowSummary: &showSummary,
-	})
-
-	if err != nil {
-		c.logger.Error("Failed to fetch usage", "error", err)
-		up = 0
-		return
-	}
-
 	latestUsage := make(map[usageMetricKey]usagePoint)
-	latestS3 := make(map[s3SelectKey]s3SelectPoint)
+	if c.enableUsageMetrics {
+		showEntries, showSummary := true, false
+		usage, err := c.client.GetUsage(scrapeCtx, admin.Usage{
+			ShowEntries: &showEntries,
+			ShowSummary: &showSummary,
+		})
 
-	for _, entry := range usage.Entries {
+		if err != nil {
+			c.logger.Error("Failed to fetch usage", "error", err)
 
-		entryUser := entry.User
-
-		for _, b := range entry.Buckets {
-
-			bucketName := normalizeBucketName(b.Bucket)
-			owner := entryUser
-
-			if o := readStringField(b, "Owner"); o != "" {
-				owner = o
+			if errors.Is(err, context.DeadlineExceeded) {
+				c.logger.Warn("Usage fetch timed out, skipping usage metrics")
+			} else {
+				up = 0
+				return
 			}
+		}
 
-			epoch := readInt64Field(b, "Epoch")
+		for _, entry := range usage.Entries {
+			entryUser := entry.User
 
-			if c.enableS3SelectMetrics {
-				s3Processed, s3Returned := readS3Select(b)
-				sk := s3SelectKey{bucket: bucketName, owner: owner}
-				prev := latestS3[sk]
-				if epoch >= prev.epoch {
-					latestS3[sk] = s3SelectPoint{
-						epoch:          epoch,
-						bytesProcessed: s3Processed,
-						bytesReturned:  s3Returned,
-					}
+			for _, b := range entry.Buckets {
+				bucketName := normalizeBucketName(b.Bucket)
+				owner := entryUser
+				if b.Owner != "" {
+					owner = b.Owner
 				}
-			}
 
-			if c.enableUsageMetrics {
+				epoch := b.Epoch
 
 				for _, cat := range b.Categories {
 					k := usageMetricKey{
@@ -399,20 +344,11 @@ func (c *RADOSGWCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 	}
 
-	if c.enableS3SelectMetrics {
-		for k, p := range latestS3 {
-			labels := []string{k.bucket, k.owner}
-			ch <- prometheus.MustNewConstMetric(c.s3selectBytesProcessed, prometheus.GaugeValue, p.bytesProcessed, labels...)
-			ch <- prometheus.MustNewConstMetric(c.s3selectBytesReturned, prometheus.GaugeValue, p.bytesReturned, labels...)
-			ch <- prometheus.MustNewConstMetric(c.s3selectEpoch, prometheus.GaugeValue, float64(p.epoch), labels...)
-		}
-	}
-
-	if !c.enableUserStats {
+	if !c.enableUserStats && !c.enableBucketStats {
 		return
 	}
 
-	uids, err := c.client.GetUsers(ctx)
+	uids, err := c.client.GetUsers(scrapeCtx)
 	if err != nil {
 		c.logger.Error("Failed to list users", "error", err)
 		up = 0
@@ -426,13 +362,16 @@ func (c *RADOSGWCollector) Collect(ch chan<- prometheus.Metric) {
 
 	processedUserIDs := make(map[string]bool)
 
-	stats := true
+	var generateStat *bool
+	if c.enableUserStats {
+		stats := true
+		generateStat = &stats
+	}
 
 	for _, uid := range *uids {
-
-		user, err := c.client.GetUser(ctx, admin.User{
+		user, err := c.client.GetUser(scrapeCtx, admin.User{
 			ID:           uid,
-			GenerateStat: &stats,
+			GenerateStat: generateStat,
 		})
 
 		if err != nil {
@@ -522,7 +461,7 @@ func (c *RADOSGWCollector) Collect(ch chan<- prometheus.Metric) {
 			continue
 		}
 
-		buckets, err := c.client.ListUsersBucketsWithStat(ctx, uid)
+		buckets, err := c.client.ListUsersBucketsWithStat(scrapeCtx, uid)
 		if err != nil {
 			c.logger.Debug("Failed to list buckets", "uid", uid, "error", err)
 			continue
@@ -602,102 +541,4 @@ func normalizeBucketName(s string) string {
 		return "bucket_unknown"
 	}
 	return s
-}
-
-func readStringField(x any, field string) string {
-	v := reflect.ValueOf(x)
-	for v.IsValid() && v.Kind() == reflect.Pointer {
-		if v.IsNil() {
-			return ""
-		}
-		v = v.Elem()
-	}
-	if !v.IsValid() || v.Kind() != reflect.Struct {
-		return ""
-	}
-	f := v.FieldByName(field)
-	if !f.IsValid() {
-		return ""
-	}
-	for f.IsValid() && f.Kind() == reflect.Pointer {
-		if f.IsNil() {
-			return ""
-		}
-		f = f.Elem()
-	}
-	if f.Kind() == reflect.String {
-		return f.String()
-	}
-	return ""
-}
-
-func readInt64Field(x any, field string) int64 {
-	v := reflect.ValueOf(x)
-	for v.IsValid() && v.Kind() == reflect.Pointer {
-		if v.IsNil() {
-			return 0
-		}
-		v = v.Elem()
-	}
-	if !v.IsValid() || v.Kind() != reflect.Struct {
-		return 0
-	}
-	f := v.FieldByName(field)
-	if !f.IsValid() {
-		return 0
-	}
-	for f.IsValid() && f.Kind() == reflect.Pointer {
-		if f.IsNil() {
-			return 0
-		}
-		f = f.Elem()
-	}
-	switch f.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return f.Int()
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return int64(f.Uint())
-	case reflect.Float32, reflect.Float64:
-		return int64(f.Float())
-	default:
-		return 0
-	}
-}
-
-func readS3Select(bucket any) (float64, float64) {
-	v := reflect.ValueOf(bucket)
-	for v.IsValid() && v.Kind() == reflect.Pointer {
-		if v.IsNil() {
-			return 0, 0
-		}
-		v = v.Elem()
-	}
-	if !v.IsValid() || v.Kind() != reflect.Struct {
-		return 0, 0
-	}
-
-	var s3 reflect.Value
-	for _, name := range []string{"S3select", "S3Select"} {
-		f := v.FieldByName(name)
-		if f.IsValid() {
-			s3 = f
-			break
-		}
-	}
-	if !s3.IsValid() {
-		return 0, 0
-	}
-	for s3.IsValid() && s3.Kind() == reflect.Pointer {
-		if s3.IsNil() {
-			return 0, 0
-		}
-		s3 = s3.Elem()
-	}
-	if !s3.IsValid() || s3.Kind() != reflect.Struct {
-		return 0, 0
-	}
-
-	processed := float64(readInt64Field(s3.Interface(), "BytesProcessed"))
-	returned := float64(readInt64Field(s3.Interface(), "BytesReturned"))
-	return processed, returned
 }

@@ -95,18 +95,7 @@ func main() {
 		enableUsageMetrics = false
 	}
 
-	// S3 Select metrics
-	s3Str := getEnv("ENABLE_S3SELECT_METRICS", "false")
-	enableS3SelectMetrics, err := strconv.ParseBool(s3Str)
-	if err != nil {
-		slog.Warn("Invalid ENABLE_S3SELECT_METRICS value, using false",
-			"value", s3Str,
-			"error", err,
-		)
-		enableS3SelectMetrics = false
-	}
-
-	collector := NewRADOSGWCollector(
+	collector, err := NewRADOSGWCollector(
 		endpoint,
 		accessKey,
 		secretKey,
@@ -115,9 +104,12 @@ func main() {
 		enableUserStats,
 		enableBucketStats,
 		enableUsageMetrics,
-		enableS3SelectMetrics,
 		logger,
 	)
+	if err != nil {
+		slog.Error("Failed to create RADOSGW collector", "error", err)
+		os.Exit(1)
+	}
 
 	prometheus.MustRegister(collector)
 
