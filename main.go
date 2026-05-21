@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,12 +22,58 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
+func parseDurationEnv(raw string) (time.Duration, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil {
+		return time.Duration(seconds) * time.Second, nil
+	}
+	return time.ParseDuration(raw)
+}
+
 func main() {
-	// Logger
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
+	// Logger config
+	logLevelStr := strings.ToLower(getEnv("LOG_LEVEL", "info"))
+	logFormatStr := strings.ToLower(getEnv("LOG_FORMAT", "json"))
+
+	var logLevel slog.Level
+	levelValid := true
+	switch logLevelStr {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "info":
+		logLevel = slog.LevelInfo
+	case "warn", "warning":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	default:
+		levelValid = false
+		logLevel = slog.LevelInfo
+	}
+
+	formatValid := true
+	var handler slog.Handler
+	switch logFormatStr {
+	case "json":
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
+	case "text":
+		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
+	default:
+		formatValid = false
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
+	}
+
+	logger := slog.New(handler)
 	slog.SetDefault(logger)
+
+	if !levelValid {
+		slog.Warn("Invalid LOG_LEVEL value, using info", "value", logLevelStr)
+	}
+	if !formatValid {
+		slog.Warn("Invalid LOG_FORMAT value, using json", "value", logFormatStr)
+	}
 
 	// Required config
 	endpoint := getEnv("RADOSGW_ENDPOINT", "")
@@ -62,6 +109,26 @@ func main() {
 	}
 	scrapeTimeout := time.Duration(scrapeTimeoutSec) * time.Second
 
+	usageCacheTTLStr := getEnv("USAGE_CACHE_TTL", "0s")
+	usageCacheTTL, err := parseDurationEnv(usageCacheTTLStr)
+	if err != nil || usageCacheTTL < 0 {
+		slog.Warn("Invalid USAGE_CACHE_TTL value, using 0s (disabled)",
+			"value", usageCacheTTLStr,
+			"error", err,
+		)
+		usageCacheTTL = 0
+	}
+
+	usersBucketsCacheTTLStr := getEnv("USERS_BUCKETS_CACHE_TTL", "0s")
+	usersBucketsCacheTTL, err := parseDurationEnv(usersBucketsCacheTTLStr)
+	if err != nil || usersBucketsCacheTTL < 0 {
+		slog.Warn("Invalid USERS_BUCKETS_CACHE_TTL value, using 0s (disabled)",
+			"value", usersBucketsCacheTTLStr,
+			"error", err,
+		)
+		usersBucketsCacheTTL = 0
+	}
+
 	// User metrics
 	userStr := getEnv("ENABLE_USER_STATS", "true")
 	enableUserStats, err := strconv.ParseBool(userStr)
@@ -95,15 +162,28 @@ func main() {
 		enableUsageMetrics = false
 	}
 
+	maxUsersPerScrapeStr := getEnv("MAX_USERS_PER_SCRAPE", "0")
+	maxUsersPerScrape, err := strconv.Atoi(maxUsersPerScrapeStr)
+	if err != nil || maxUsersPerScrape < 0 {
+		slog.Warn("Invalid MAX_USERS_PER_SCRAPE value, using 0 (all users per scrape)",
+			"value", maxUsersPerScrapeStr,
+			"error", err,
+		)
+		maxUsersPerScrape = 0
+	}
+
 	collector, err := NewRADOSGWCollector(
 		endpoint,
 		accessKey,
 		secretKey,
 		insecure,
 		scrapeTimeout,
+		usageCacheTTL,
+		usersBucketsCacheTTL,
 		enableUserStats,
 		enableBucketStats,
 		enableUsageMetrics,
+		maxUsersPerScrape,
 		logger,
 	)
 	if err != nil {
@@ -113,9 +193,16 @@ func main() {
 
 	prometheus.MustRegister(collector)
 
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
 	server := &http.Server{
 		Addr:    ":" + port,
-		Handler: promhttp.Handler(),
+		Handler: mux,
 	}
 
 	go func() {

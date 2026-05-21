@@ -1,0 +1,139 @@
+# Default values for radosgw-exporter
+replicaCount: 1
+
+image:
+  repository: ghcr.io/tulvar/radosgw_exporter
+  tag: 1.1.6
+  pullPolicy: Always
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# ServiceAccount configuration
+serviceAccount:
+  create: true
+  name: ""
+
+podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9242"
+    prometheus.io/path: "/metrics"
+podLabels: {}
+
+podSecurityContext:
+  fsGroup: 10001
+  runAsUser: 10001
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
+  runAsNonRoot: true
+  runAsUser: 10001
+  privileged: false
+
+service:
+  type: ClusterIP
+  port: 9242
+  annotations: {}
+
+resources:
+  limits:
+    memory: 256Mi
+    cpu: 500m
+  requests:
+    memory: 128Mi
+    cpu: 100m
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http-metrics
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http-metrics
+  initialDelaySeconds: 5
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# RADOSGW exporter specific configuration
+exporter:
+  # Required - RADOSGW endpoint
+  endpoint: "http://rook-ceph-rgw-ceph-objectstore.ceph-storage.svc:80"
+  
+  # Credentials configuration
+  credentials:
+    # Option 1: Use existing secret
+    existingSecret:
+      # Name of existing Kubernetes Secret containing credentials
+      # If not specified, a new secret will be created
+      name: ""
+      # Optional: custom key names in the existing secret (defaults shown)
+      accessKeyKey: "accessKey"
+      secretKeyKey: "secretKey"
+    
+    # Option 2: Create new secret (used if existingSecret.name is not specified)
+    createSecret: true
+    secretName: ""  # If empty, will use {{ .Release.Name }}-radosgw-credentials
+    # Values for the new secret (required if createSecret is true)
+    accessKey: ""
+    secretKey: ""
+  
+  # Optional environment variables
+  insecureSkipVerify: false
+  metricsPort: 9242
+  scrapeTimeout: 15
+  usageCacheTTL: "0s"
+  usersBucketsCacheTTL: "0s"
+  maxUsersPerScrape: 0
+  logLevel: "info"
+  logFormat: "json"
+
+  enableUserStats: true
+  enableBucketStats: true
+  enableUsageMetrics: true
+
+  # Extra environment variables
+  extraEnv: []
+
+# Prometheus ServiceMonitor (for Prometheus Operator)
+serviceMonitor:
+  enabled: false
+  namespace: ""
+  additionalLabels: {}
+  interval: 60s
+  scrapeTimeout: 30s
+  scheme: http
+  tlsConfig: {}
+  relabelings: []
+  metricRelabelings: []
+  
+  # Basic auth for Prometheus scraping
+  basicAuth:
+    enabled: false
+    username: ""
+    password: ""
+    existingSecret: ""
+    usernameKey: "username"
+    passwordKey: "password"

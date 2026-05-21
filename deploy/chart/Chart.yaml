@@ -1,0 +1,17 @@
+apiVersion: v2
+name: radosgw-exporter
+description: Prometheus exporter for Ceph RADOS Gateway
+type: application
+version: v0.4.0
+appVersion: "v1.1.6"
+keywords:
+  - ceph
+  - radosgw
+  - s3
+  - prometheus
+  - exporter
+home: https://github.com/Tulvar/radosgw_exporter
+sources:
+  - https://github.com/Tulvar/radosgw_exporter
+maintainers:
+  - name: Tulvar

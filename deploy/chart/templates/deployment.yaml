@@ -1,0 +1,137 @@
+{{- include "radosgw-exporter.validateCredentials" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "radosgw-exporter.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "radosgw-exporter.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.podAnnotations | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "radosgw-exporter.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "radosgw-exporter.selectorLabels" . | nindent 8 }}
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "radosgw-exporter.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            # Required environment variables
+            - name: RADOSGW_ENDPOINT
+              value: {{ .Values.exporter.endpoint | quote }}
+            
+            # Metrics port
+            - name: METRICS_PORT
+              value: {{ .Values.exporter.metricsPort | quote }}
+            
+            # TLS verification
+            - name: INSECURE_SKIP_VERIFY
+              value: {{ .Values.exporter.insecureSkipVerify | quote }}
+            
+            # Scrape timeout (seconds)
+            - name: SCRAPE_TIMEOUT
+              value: {{ .Values.exporter.scrapeTimeout | quote }}
+            - name: USAGE_CACHE_TTL
+              value: {{ .Values.exporter.usageCacheTTL | quote }}
+            - name: USERS_BUCKETS_CACHE_TTL
+              value: {{ .Values.exporter.usersBucketsCacheTTL | quote }}
+            - name: MAX_USERS_PER_SCRAPE
+              value: {{ .Values.exporter.maxUsersPerScrape | quote }}
+            
+            # Metric group toggles
+            - name: ENABLE_USER_STATS
+              value: {{ .Values.exporter.enableUserStats | quote }}
+            - name: ENABLE_BUCKET_STATS
+              value: {{ .Values.exporter.enableBucketStats | quote }}
+            - name: ENABLE_USAGE_METRICS
+              value: {{ .Values.exporter.enableUsageMetrics | quote }}
+            
+            # Logging configuration
+            {{- if .Values.exporter.logLevel }}
+            - name: LOG_LEVEL
+              value: {{ .Values.exporter.logLevel | quote }}
+            {{- end }}
+            {{- if .Values.exporter.logFormat }}
+            - name: LOG_FORMAT
+              value: {{ .Values.exporter.logFormat | quote }}
+            {{- end }}
+            
+            # Access key from Kubernetes Secret
+            - name: ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "radosgw-exporter.secretName" . | quote }}
+                  key: {{ include "radosgw-exporter.accessKeyKey" . | quote }}
+            
+            # Secret key from Kubernetes Secret
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "radosgw-exporter.secretName" . | quote }}
+                  key: {{ include "radosgw-exporter.secretKeyKey" . | quote }}
+            
+            # Extra environment variables
+            {{- with .Values.exporter.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            
+          ports:
+            - name: http-metrics
+              containerPort: {{ .Values.exporter.metricsPort }}
+              protocol: TCP
+          
+          # Health checks
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.livenessProbe.httpGet.path | quote }}
+              port: {{ .Values.livenessProbe.httpGet.port | quote }}
+              scheme: HTTP
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.readinessProbe.httpGet.path | quote }}
+              port: {{ .Values.readinessProbe.httpGet.port | quote }}
+              scheme: HTTP
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      
+      # Node selection and affinity
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
