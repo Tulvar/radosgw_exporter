@@ -95,6 +95,11 @@ ENABLE_USAGE_METRICS=true
 |---|---|---|
 | INSECURE_SKIP_VERIFY  |  false |  Отключает TLS проверку |   
 |  SCRAPE_TIMEOUT |  15 |  Таймаут сбора метрик (сек) |  
+| USAGE_CACHE_TTL | 0s | TTL кеша usage-метрик (`0s` = отключено, поддерживаются значения `60`, `30s`, `2m`) |
+| USERS_BUCKETS_CACHE_TTL | 0s | TTL кеша users/buckets-метрик (`0s` = отключено, поддерживаются значения `60`, `30s`, `2m`) |
+| MAX_USERS_PER_SCRAPE | 0 | Лимит пользователей за один scrape (0 = без лимита) |
+| LOG_LEVEL | info | Уровень логов: debug/info/warn/error |
+| LOG_FORMAT | json | Формат логов: json/text |
 | METRICS_PORT  | 9242  | HTTP порт экспорта метрик  |  
 ---
 ## 📊 Метрики доступны по адресу
